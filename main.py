@@ -20,15 +20,19 @@ class AppUsageDB:
         self.cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS usage (
-                name_process TEXT PRIMARY KEY,
+                name_process TEXT,
+                date TEXT,
                 time REAL NOT NULL,
-                time_type TEXT NOT NULL
+                time_type TEXT NOT NULL,
+                PRIMARY KEY (name_process, date)
             )
         """
         )
         self.conn.commit()
 
     def _to_seconds(self, seconds: int, type) -> float:
+        if type == 'seconds':
+            return seconds
         if type == 'minutes':
             return seconds * 60
     
@@ -40,7 +44,7 @@ class AppUsageDB:
     def _normalize_time(self, seconds: float , type=None):
         """Красивый вывод времени"""
         if seconds < 60:
-            return seconds, "seconds"
+            return round(seconds), "seconds"
         elif seconds < 3600:
             return round(seconds/60, 2), "minutes"
         else:
@@ -48,7 +52,10 @@ class AppUsageDB:
 
     def update_app_time(self, app: str, elapsed: float):
         """Добавляем или обновляем запись для приложения"""
-        self.cursor.execute("SELECT time, time_type FROM usage WHERE name_process=?", (app,))
+        date = datetime.today().strftime("%Y-%m-%d")
+        self.cursor.execute(
+            "SELECT time, time_type FROM usage WHERE name_process=? AND date=?",
+            (app, date))
         row = self.cursor.fetchone()
 
         if row:
@@ -57,28 +64,41 @@ class AppUsageDB:
                 old_time = self._to_seconds(old_time, old_type)
             new_time = old_time + elapsed
             time_value, time_type = self._normalize_time(new_time, old_type)
-            self.cursor.execute("""UPDATE usage SET time=?, time_type=? WHERE name_process=?
-            """, (time_value, time_type, app))
+            self.cursor.execute("""
+                UPDATE usage SET time=?, time_type=? 
+                WHERE name_process=? AND date=?
+            """, (time_value, time_type, app, date))
         else:
             time_value, time_type = self._normalize_time(elapsed)
             self.cursor.execute(
                 """
-                INSERT INTO usage (name_process, time, time_type) 
-                VALUES (?, ?, ?)
-            """, (app, time_value, time_type)
+                INSERT INTO usage (name_process, date, time, time_type) 
+                VALUES (?, ?, ?, ?)
+            """, (app, date, time_value, time_type)
             )
             self.conn.commit()
 
-    def fetch_stats(self):
-        """Возвращает все данные"""
+    def fetch_all_time_stats(self):
+        """Считает сумму времени за все время для каждого приложения"""
+        self.cursor.execute("SELECT * FROM usage")
+        all_rows = self.cursor.fetchall()
+        answer = defaultdict(float)
+        for name, _, time, time_type in all_rows:
+            answer[name] += self._to_seconds(time, time_type)
+        for k, v in answer.items():
+            t, t_type = self._normalize_time(v)
+            print(f"Total time {k}: {t:.1f} {t_type}")
+
+    def fetch_daily_stats(self):
+        """Возвращает все данные за день"""
         self.cursor.execute("SELECT * FROM usage")
         return self.cursor.fetchall()
     
     def print_stats(self):
-        rows = self.fetch_stats()
+        rows = self.fetch_daily_stats()
         print("\nUsage stats:")
-        for name, t, t_type in rows:
-            print(f"{name}: {t:.1f} {t_type}")
+        for name, date, t, t_type in rows:
+            print(f"{date=} {name=}: {t:.1f} {t_type}")
     
     def close(self):
         self.conn.close()
@@ -127,6 +147,7 @@ if __name__ == "__main__":
 
     except KeyboardInterrupt:
         print("\nFinal stats:")
+        db.fetch_all_time_stats()
         db.print_stats()
         db.close()
 
