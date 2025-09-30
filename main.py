@@ -1,186 +1,259 @@
-from collections import defaultdict
-import win32gui
-import time
-import win32process
-import psutil
-from datetime import datetime
-import sqlite3
+import sys
+from PyQt5.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QLineEdit,
+    QLabel,
+    QPushButton,
+)
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QIcon, QFont
 
-storage = defaultdict(str)
-time_process = {}
+from usage import AppUsageDB, AppUsageTracker
 
 
-class AppUsageDB:
-    def __init__(self, db_name="usage.db"):
-        self.conn = sqlite3.connect(db_name, autocommit=True)
-        self.cursor = self.conn.cursor()
-        self._create_table()
+class UsageTable(QTableWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setColumnCount(3)
+        self.setHorizontalHeaderLabels(["Приложение", "Время", "Единицы"])
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.setSortingEnabled(True)
+        self.setAlternatingRowColors(True)
+        self.setSelectionBehavior(QTableWidget.SelectRows)
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.setShowGrid(True)
+        self.verticalHeader().setVisible(False)
 
-    def _create_table(self):
-        self.cursor.execute(
+    def populate_today(self, rows):
+        # rows: list of dicts with keys name, time, type, seconds
+        self.setSortingEnabled(False)
+        self.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            self.setItem(r, 0, QTableWidgetItem(row["name"]))
+            self.setItem(r, 1, QTableWidgetItem(str(row["time"])))
+            self.setItem(r, 2, QTableWidgetItem(row["type"]))
+        self.setSortingEnabled(True)
+
+    def populate_totals(self, totals_dict):
+        # totals_dict: {name: {time, type}}
+        items = list(totals_dict.items())
+        self.setSortingEnabled(False)
+        self.setRowCount(len(items))
+        for r, (name, info) in enumerate(items):
+            self.setItem(r, 0, QTableWidgetItem(name))
+            self.setItem(r, 1, QTableWidgetItem(str(info["time"])))
+            self.setItem(r, 2, QTableWidgetItem(info["type"]))
+        self.setSortingEnabled(True)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Time Manager - App Usage")
+        self.setMinimumSize(900, 600)
+        self.setWindowIcon(QIcon())
+
+        self.db = AppUsageDB("usage.db")
+        self.tracker = AppUsageTracker(self.db)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(15)
+
+        # Top bar with search and refresh
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(10)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Поиск приложения…")
+        self.refresh_btn = QPushButton("Обновить")
+        self.status_label = QLabel("")
+        top_bar.addWidget(self.search_input)
+        top_bar.addWidget(self.refresh_btn)
+        top_bar.addStretch()
+        top_bar.addWidget(self.status_label)
+
+        main_layout.addLayout(top_bar)
+
+        # Tabs
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
+
+        # Today tab
+        self.today_tab = QWidget()
+        self.today_table = UsageTable()
+        today_layout = QVBoxLayout(self.today_tab)
+        today_layout.setContentsMargins(0, 10, 0, 0)
+        today_layout.addWidget(self.today_table)
+        self.tabs.addTab(self.today_tab, "Сегодня")
+
+        # Totals tab
+        self.total_tab = QWidget()
+        self.total_table = UsageTable()
+        total_layout = QVBoxLayout(self.total_tab)
+        total_layout.setContentsMargins(0, 10, 0, 0)
+        total_layout.addWidget(self.total_table)
+        self.tabs.addTab(self.total_tab, "Все время")
+
+        # Connections
+        self.refresh_btn.clicked.connect(self.refresh_tables)
+        self.search_input.textChanged.connect(self.apply_filter)
+
+        # Timer to update tracking and UI
+        self.timer = QTimer(self)
+        self.timer.setInterval(2000)
+        self.timer.timeout.connect(self.on_tick)
+        self.timer.start()
+
+        self.refresh_tables()
+        self.apply_modern_style()
+
+    def on_tick(self):
+        # Update usage and refresh visible tab for responsiveness
+        self.tracker.update_usage()
+        self.refresh_tables()
+
+    def refresh_tables(self):
+        today = self.db.fetch_today_stats()
+        totals = self.db.fetch_all_time_stats()
+        # Apply in-memory filter before populating
+        query = self.search_input.text().strip().lower()
+        if query:
+            today = [r for r in today if query in r["name"].lower()]
+            totals = {k: v for k, v in totals.items() if query in k.lower()}
+        self.today_table.populate_today(today)
+        self.total_table.populate_totals(totals)
+        if today:
+            self.status_label.setText(f"Активных записей сегодня: {len(today)}")
+        else:
+            self.status_label.setText("Нет данных за сегодня")
+
+    def apply_filter(self):
+        self.refresh_tables()
+
+    def apply_modern_style(self):
+        self.setStyleSheet(
             """
-            CREATE TABLE IF NOT EXISTS usage (
-                name_process TEXT,
-                date TEXT,
-                time REAL NOT NULL,
-                time_type TEXT NOT NULL,
-                PRIMARY KEY (name_process, date)
-            )
-        """
+            QMainWindow {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #121212, stop:1 #0f0f0f);
+            }
+            QWidget {
+                color: #ECECEC;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 14px;
+            }
+            QLabel {
+                color: #B0B0B0;
+                font-size: 12px;
+            }
+            QLineEdit {
+                padding: 12px 16px;
+                border: 2px solid #2a2a2a;
+                border-radius: 10px;
+                background: #1e1e1e;
+                font-size: 14px;
+                min-width: 250px;
+            }
+            QLineEdit:focus {
+                border-color: #4a90e2;
+                background: #222222;
+            }
+            QLineEdit::placeholder {
+                color: #666666;
+            }
+            QPushButton {
+                padding: 12px 20px;
+                border: 2px solid #2a2a2a;
+                border-radius: 10px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1f1f1f, stop:1 #181818);
+                color: #ECECEC;
+                font-size: 14px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2a2a2a, stop:1 #232323);
+                border-color: #4a90e2;
+            }
+            QPushButton:pressed {
+                background: #1a1a1a;
+            }
+            QTableWidget {
+                gridline-color: #2a2a2a;
+                background: #161616;
+                alternate-background-color: #1a1a1a;
+                selection-background-color: #4a90e2;
+                selection-color: #ffffff;
+                border: none;
+            }
+            QTableWidget::item {
+                padding: 12px;
+                border-bottom: 1px solid #2a2a2a;
+            }
+            QTableWidget::item:selected {
+                background: #4a90e2;
+                color: #ffffff;
+            }
+            QHeaderView::section {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1f1f1f, stop:1 #181818);
+                padding: 12px;
+                border: none;
+                border-bottom: 2px solid #2a2a2a;
+                font-weight: 600;
+                color: #ECECEC;
+                font-size: 13px;
+            }
+            QHeaderView::section:hover {
+                background: #2a2a2a;
+            }
+            QTabWidget::pane {
+                border: 1px solid #2a2a2a;
+                background: #161616;
+                border-radius: 8px;
+            }
+            QTabBar::tab {
+                padding: 12px 20px;
+                background: #1a1a1a;
+                border: 1px solid #2a2a2a;
+                border-bottom: none;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                color: #B0B0B0;
+                font-weight: 500;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background: #222222;
+                color: #4a90e2;
+                border-bottom: 2px solid #4a90e2;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #2a2a2a;
+                color: #ECECEC;
+            }
+            """
         )
-        self.conn.commit()
-
-    def _to_seconds(self, seconds: int, type) -> float:
-        if type == 'seconds':
-            return seconds
-        if type == 'minutes':
-            return seconds * 60
-    
-        elif type== 'hours':
-            return seconds * 3600
-        
-        raise ValueError('TYPE MUST BE HOURS OR MINUTES')
-        
-    def _normalize_time(self, seconds: float , type=None):
-        """Красивый вывод времени"""
-        if seconds < 60:
-            return round(seconds), "seconds"
-        elif seconds < 3600:
-            return round(seconds/60, 2), "minutes"
-        else:
-            return round(seconds/3600, 2), "hours"
-
-    def update_app_time(self, app: str, elapsed: float):
-        """Добавляем или обновляем запись для приложения"""
-        date = datetime.today().strftime("%Y-%m-%d")
-        self.cursor.execute(
-            "SELECT time, time_type FROM usage WHERE name_process=? AND date=?",
-            (app, date))
-        row = self.cursor.fetchone()
-
-        if row:
-            old_time, old_type = row
-            if old_type != 'seconds':
-                old_time = self._to_seconds(old_time, old_type)
-            new_time = old_time + elapsed
-            time_value, time_type = self._normalize_time(new_time, old_type)
-            self.cursor.execute("""
-                UPDATE usage SET time=?, time_type=? 
-                WHERE name_process=? AND date=?
-            """, (time_value, time_type, app, date))
-        else:
-            time_value, time_type = self._normalize_time(elapsed)
-            self.cursor.execute(
-                """
-                INSERT INTO usage (name_process, date, time, time_type) 
-                VALUES (?, ?, ?, ?)
-            """, (app, date, time_value, time_type)
-            )
-            self.conn.commit()
-
-    def fetch_all_time_stats(self):
-        """Считает сумму времени за все время для каждого приложения"""
-        self.cursor.execute("SELECT * FROM usage")
-        all_rows = self.cursor.fetchall()
-        answer = defaultdict(float)
-        for name, _, time, time_type in all_rows:
-            answer[name] += self._to_seconds(time, time_type)
-        for k, v in answer.items():
-            t, t_type = self._normalize_time(v)
-            print(f"Total time {k}: {t:.1f} {t_type}")
-
-    def fetch_daily_stats(self):
-        """Возвращает все данные за день"""
-        self.cursor.execute("SELECT * FROM usage")
-        return self.cursor.fetchall()
-    
-    def print_stats(self):
-        rows = self.fetch_daily_stats()
-        print("\nUsage stats:")
-        for name, date, t, t_type in rows:
-            print(f"{date=} {name=}: {t:.1f} {t_type}")
-    
-    def close(self):
-        self.conn.close()
 
 
-class AppUsageTracker:
-    def __init__(self, db: AppUsageDB):
-        self.db = db
-        self.active_app = None
-        self.last_switch_time = time.time()
-
-    def get_active_app(self) -> str:
-        """Возвращает имя активного приложения"""
-        hwnd = win32gui.GetForegroundWindow()
-        _, pid = win32process.GetWindowThreadProcessId(hwnd)
-        try:
-            process = psutil.Process(pid)
-            name = process.name().replace(".exe", "").title()
-            return name
-        except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
-            return "Unknown"
-
-    def update_usage(self):
-        """Обновляет время для текущего активного приложения"""
-        current_app = self.get_active_app()
-
-        # if current_app != self.active_app:
-        now = time.time()
-        if self.active_app and self.last_switch_time:
-            elapsed = now - self.last_switch_time
-            self.db.update_app_time(self.active_app, elapsed)
-        self.active_app = current_app
-        self.last_switch_time = now
-
+def main():
+    app = QApplication(sys.argv)
+    app.setStyle('Fusion')  # Use Fusion style for better modern look
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
-    db = AppUsageDB()
-    tracker = AppUsageTracker(db)
-
-    try:
-        while True:
-            tracker.update_usage()
-            db.print_stats()
-            time.sleep(5)
-
-    except KeyboardInterrupt:
-        print("\nFinal stats:")
-        db.fetch_all_time_stats()
-        db.print_stats()
-        db.close()
-
-
-# def storage_update_process_time(name: str):
-#     """SAVES TIME FOR EACH APPLICATION"""
-#     cur_time = time_process[name]
-#     if cur_time < 60:
-#         storage[name] = f"{cur_time} seconds"
-#     elif 60 < cur_time < 3600:
-#         storage[name] = f'{cur_time/60:.1f} minutes'
-#     else:
-#         storage[name] = f'{cur_time/3600:.1f} hours'
-
-# def get_active_window():
-#     hwnd = win32gui.GetForegroundWindow()
-#     _, pid = win32process.GetWindowThreadProcessId(hwnd)
-#     try:
-#         process = psutil.Process(pid)
-#         process_name = process.name()
-#     except:
-#         pass
-#     process_name = process_name.replace('.exe', '').title()
-#     if process_name not in storage:
-#         time_process[process_name] = 1
-#         storage_update_process_time(process_name)
-#         return process_name
-#     time_process[process_name] += 1
-#     storage_update_process_time(process_name)
-#     return process_name
-
-
-# while True:
-#     process_name = get_active_window()
-#     print(process_name, storage[process_name])
-#     sleep(time)
+    main()
