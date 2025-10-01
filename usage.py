@@ -30,12 +30,22 @@ IGNORED_APPS = {
     'Widgets',
 }
 
+import sqlite3
+from pathlib import Path
 
 class AppUsageDB:
     def __init__(self, db_name="usage.db"):
-        self.conn = sqlite3.connect(db_name, autocommit=True)
+        # Берем путь к папке, где находится скрипт gui.py
+        script_path = Path(__file__).resolve()
+        # Если база должна быть в корне проекта (например, на уровень выше скрипта)
+        root_path = script_path.parent
+        db_path = root_path / db_name
+
+        # Подключаемся к базе по абсолютному пути
+        self.conn = sqlite3.connect(db_path)
         self.cursor = self.conn.cursor()
         self._create_table()
+
 
     def _create_table(self):
         self.cursor.execute(
@@ -51,14 +61,14 @@ class AppUsageDB:
         )
         self.conn.commit()
 
-    def _to_seconds(self, seconds: int, type) -> float:
+    def _to_seconds(self, time: int, type) -> float:
         if type == 'seconds':
-            return seconds
+            return time
         if type == 'minutes':
-            return seconds * 60
+            return time * 60
     
         elif type== 'hours':
-            return seconds * 3600
+            return time * 3600
         
         raise ValueError('Invalid time type; must be "seconds", "minutes", or "hours"')
         
@@ -67,9 +77,9 @@ class AppUsageDB:
         if seconds < 60:
             return round(seconds), "seconds"
         elif seconds < 3600:
-            return round(seconds/60, 2), "minutes"
+            return round(seconds/60, 10), "minutes"
         else:
-            return round(seconds/3600, 2), "hours"
+            return round(seconds/3600, 10), "hours"
 
     def update_app_time(self, app: str, elapsed: float):
         """Add or update time for an app on today's date."""

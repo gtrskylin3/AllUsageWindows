@@ -40,9 +40,10 @@ class UsageTable(QTableWidget):
         self.setSortingEnabled(False)
         self.setRowCount(len(rows))
         for r, row in enumerate(rows):
-            self.setItem(r, 0, QTableWidgetItem(row["name"]))
-            self.setItem(r, 1, QTableWidgetItem(str(row["time"])))
-            self.setItem(r, 2, QTableWidgetItem(row["type"]))
+            if row['type'] != 'seconds':
+                self.setItem(r, 0, QTableWidgetItem(row["name"]))
+                self.setItem(r, 1, QTableWidgetItem(str(round(row["time"], 3))))
+                self.setItem(r, 2, QTableWidgetItem(row["type"]))
         self.setSortingEnabled(True)
 
     def populate_totals(self, totals_dict):
@@ -51,9 +52,10 @@ class UsageTable(QTableWidget):
         self.setSortingEnabled(False)
         self.setRowCount(len(items))
         for r, (name, info) in enumerate(items):
-            self.setItem(r, 0, QTableWidgetItem(name))
-            self.setItem(r, 1, QTableWidgetItem(str(info["time"])))
-            self.setItem(r, 2, QTableWidgetItem(info["type"]))
+            if info['type'] != 'seconds':
+                self.setItem(r, 0, QTableWidgetItem(name))
+                self.setItem(r, 1, QTableWidgetItem(str(round(info["time"], 2))))
+                self.setItem(r, 2, QTableWidgetItem(info["type"]))
         self.setSortingEnabled(True)
 
 
@@ -153,7 +155,7 @@ class MainWindow(QMainWindow):
             QWidget {
                 color: #ECECEC;
                 font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 14px;
+                font-size: 24px;
             }
             QLabel {
                 color: #B0B0B0;
